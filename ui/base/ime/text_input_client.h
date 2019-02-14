@@ -198,6 +198,22 @@ class UI_BASE_IME_EXPORT TextInputClient {
   // improve typing suggestions for the user. This should return false for text
   // fields that are considered 'private' (e.g. in incognito tabs).
   virtual bool ShouldDoLearning() = 0;
+
+#if defined(OS_WIN)
+  // Dispatch a key event from input service to text input client. This should
+  // only be used for composition scenario since the IME will consume windows
+  // native key message and we won't receive any key events. We need to
+  // synthesize key event and notify text input client to fire corresponding
+  // javascript key events. This is windows only.
+  virtual void DispatchKeyEventForIME(ui::KeyEvent* key) {}
+
+  // Start a composition range for existing text. This should only be used for
+  // composition scenario when IME want to start composition on existing text.
+  virtual void SetCompositionFromExistingText(
+      size_t start,
+      size_t end,
+      const std::vector<ui::ImeTextSpan>& ui_ime_text_spans) {}
+#endif
 };
 
 }  // namespace ui

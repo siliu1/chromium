@@ -126,6 +126,9 @@ class TSFBridgeImpl : public TSFBridge {
   // Represents the window that is currently owns text input focus.
   HWND attached_window_handle_ = nullptr;
 
+  // Handle to ITfKeyTraceEventSink.
+  DWORD key_trace_sink_cookie_ = 0;
+
   DISALLOW_COPY_AND_ASSIGN(TSFBridgeImpl);
 };
 
@@ -135,6 +138,14 @@ TSFBridgeImpl::~TSFBridgeImpl() {
   DCHECK(base::MessageLoopCurrentForUI::IsSet());
   if (!IsInitialized())
     return;
+
+  if (thread_manager_ != nullptr) {
+    Microsoft::WRL::ComPtr<ITfSource> source;
+    if (SUCCEEDED(thread_manager_->QueryInterface(IID_PPV_ARGS(&source)))) {
+      source->UnadviseSink(key_trace_sink_cookie_);
+    }
+  }
+
   for (TSFDocumentMap::iterator it = tsf_document_map_.begin();
        it != tsf_document_map_.end(); ++it) {
     Microsoft::WRL::ComPtr<ITfContext> context;
@@ -311,6 +322,9 @@ bool TSFBridgeImpl::CreateDocumentManager(TSFTextStore* text_store,
     return false;
   }
 
+  if (!text_store || !source_cookie)
+    return true;
+
   DWORD edit_cookie = TF_INVALID_EDIT_COOKIE;
   if (FAILED((*document_manager)
                  ->CreateContext(client_id_, 0,
@@ -325,9 +339,6 @@ bool TSFBridgeImpl::CreateDocumentManager(TSFTextStore* text_store,
     return false;
   }
 
-  if (!text_store || !source_cookie)
-    return true;
-
   Microsoft::WRL::ComPtr<ITfSource> source;
   if (FAILED((*context)->QueryInterface(IID_PPV_ARGS(&source)))) {
     DVLOG(1) << "Failed to get source.";
@@ -338,6 +349,21 @@ bool TSFBridgeImpl::CreateDocumentManager(TSFTextStore* text_store,
                                 static_cast<ITfTextEditSink*>(text_store),
                                 source_cookie))) {
     DVLOG(1) << "AdviseSink failed.";
+    return false;
+  }
+
+  Microsoft::WRL::ComPtr<ITfSource> source_ITfThreadMgr;
+  if (FAILED(thread_manager_->QueryInterface(
+          IID_PPV_ARGS(&source_ITfThreadMgr)))) {
+    DVLOG(1) << "Failed to get source_ITfThreadMgr.";
+    return false;
+  }
+
+  if (FAILED(source_ITfThreadMgr->AdviseSink(
+          IID_ITfKeyTraceEventSink,
+          static_cast<ITfKeyTraceEventSink*>(text_store),
+          &key_trace_sink_cookie_))) {
+    DVLOG(1) << "AdviseSink for ITfKeyTraceEventSink failed.";
     return false;
   }
 
@@ -368,9 +394,8 @@ bool TSFBridgeImpl::InitializeDocumentMapInternal() {
                                document_manager.GetAddressOf(),
                                context.GetAddressOf(), cookie_ptr))
       return false;
-    const bool use_disabled_context = (input_type == TEXT_INPUT_TYPE_PASSWORD ||
-                                       input_type == TEXT_INPUT_TYPE_NONE);
-    if (use_disabled_context && !InitializeDisabledContext(context.Get()))
+    if ((input_type == TEXT_INPUT_TYPE_PASSWORD) &&
+        !InitializeDisabledContext(context.Get()))
       return false;
     tsf_document_map_[input_type].text_store = text_store;
     tsf_document_map_[input_type].document_manager = document_manager;
@@ -419,6 +444,10 @@ bool TSFBridgeImpl::InitializeDisabledContext(ITfContext* context) {
 }
 
 bool TSFBridgeImpl::IsFocused(ITfDocumentMgr* document_manager) {
+  if (!IsInitialized()) {
+    // Hasn't been initialized yet. Return false.
+    return false;
+  }
   Microsoft::WRL::ComPtr<ITfDocumentMgr> focused_document_manager;
   if (FAILED(
           thread_manager_->GetFocus(focused_document_manager.GetAddressOf())))
@@ -431,6 +460,10 @@ bool TSFBridgeImpl::IsInitialized() {
 }
 
 void TSFBridgeImpl::UpdateAssociateFocus() {
+  if (!IsInitialized()) {
+    // Hasn't been initialized yet. Do nothing.
+    return;
+  }
   if (attached_window_handle_ == nullptr)
     return;
   TSFDocument* document = GetAssociatedDocument();
@@ -450,6 +483,10 @@ void TSFBridgeImpl::UpdateAssociateFocus() {
 }
 
 void TSFBridgeImpl::ClearAssociateFocus() {
+  if (!IsInitialized()) {
+    // Hasn't been initialized yet. Do nothing.
+    return;
+  }
   if (attached_window_handle_ == nullptr)
     return;
   Microsoft::WRL::ComPtr<ITfDocumentMgr> previous_focus;
